@@ -1,46 +1,42 @@
-import fs from "fs";
-import path from "path";
-import axios from "axios";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+let posts = []; // in-memory fallback since Vercel can't write files
 
 export default async function handler(req, res) {
   const today = new Date().toISOString().slice(0, 10);
-  const postsPath = path.join(process.cwd(), "data", "posts.json");
+  const currentTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  let posts = [];
-  if (fs.existsSync(postsPath)) {
-    posts = JSON.parse(fs.readFileSync(postsPath, "utf-8") || "[]");
-  }
-
-  const existing = posts.find(p => p.date === today);
+  // Return existing post if already generated
+  const existing = posts.find((p) => p.date === today);
   if (existing) return res.status(200).json(existing);
 
-  const prompt = `Write a short, fun, text-only daily post (with emojis, hashtags, and a builder vibe) for Day ${posts.length + 1} of building an AI fitness app in public.`;
+  const genAI = new GoogleGenerativeAI({ apiKey: process.env.HUGGINGFACE_API });
+  const model = genAI.getGenerativeModel({ model: "HuggingFaceH4/zephyr-7b-beta" });
 
   try {
-    const response = await axios.post(
-      "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",
-      { inputs: prompt },
+    const result = await model.generateContent([
       {
-        headers: {
-          Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-        },
+        role: "user",
+        parts: [
+          `Write a short, platform-agnostic daily log update (with emojis, hashtags, energy) for Day ${posts.length + 1} of building a Gen Z-targeted AI fitness app in public. Keep it real, enthusiastic, and authentic.`
+        ]
       }
-    );
+    ]);
 
-    const text = response.data?.[0]?.generated_text || "No idea generated.";
+    const response = await result.response;
+    const ideaText = response.text();
+
     const newPost = {
       day: posts.length + 1,
       date: today,
-      time: new Date().toLocaleTimeString(),
-      text
+      time: currentTime,
+      text: ideaText
     };
 
     posts.push(newPost);
-    fs.writeFileSync(postsPath, JSON.stringify(posts, null, 2));
-
-    res.status(200).json(newPost);
-  } catch (err) {
-    console.error("HuggingFace Error:", err.message);
-    res.status(500).json({ error: "Failed to generate post." });
+    return res.status(200).json(newPost);
+  } catch (error) {
+    console.error("HuggingFace API error:", error);
+    return res.status(500).json({ error: "Generation failed." });
   }
 }
